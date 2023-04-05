@@ -1,0 +1,9 @@
+# Map for badge-server
+# Format:
+# <tournament-id>, "<folder-path>"
+
+41, "Euro2020"
+17, "Euro2020"
+18, "Euro2020"
+20, "Euro2020"
+4, "UEFA Champions League"
