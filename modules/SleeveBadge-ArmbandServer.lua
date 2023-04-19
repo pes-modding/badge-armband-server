@@ -2,7 +2,7 @@
 -- by Hawke and juce
 -- originally released on EvoWeb.uk in April 2023
 
-local m = { version = "v2.1" }
+local m = { version = "v3.0" }
 
 local map
 local map_count
@@ -17,9 +17,6 @@ local hard_patch_codecave_addr
 local badge_patch_map
 local messages = {}
 local frame_count = 0
-
--- function handlers
-local get_badge
 
 local reload_button = {
     vkey = 0x30, label = "[0]"
@@ -62,41 +59,10 @@ local function get_tid(ctx)
 end
 
 function m.get_filepath(ctx, filename)
-    local str = string.match(filename, "Asset\\model\\character\\uniform\\badge\\#windx11\\badge(%d+)%.ftex")
-    if str then
-        local badge_id = tonumber(str)
-        local tid = get_tid(ctx)
-        local folder = map[tid]
-        if not folder then
-            -- no badges mapped for this tournament id
-            if badge_id >= 0x2000 then
-                badge_id = badge_id - 0x2000
-            end
-            if badge_id >= 0x1000 then
-                badge_id = badge_id - 0x1000
-            end
-            if badge_id ~= tonumber(str) then
-                filename = string.format("Asset\\model\\character\\uniform\\badge\\#windx11\\badge%02d.ftex", badge_id)
-                log("Loading: " .. filename .. " (" .. str .. ")")
-                return ret
-            end
-            log("Loading: " .. filename)
-            return
-        end
-        log("Loading: " .. filename)
-        local path = get_badge(ctx, folder, str)
-        log(filename .. " => " .. tostring(path))
-        return path
-    end
-
     for p,f in pairs(patterns) do
         local str = string.match(filename, p)
         if str then
             log("Loading: " .. filename)
-            --if code_cave_addr then
-            --    local is_away_team = memory.unpack("u8", memory.read(code_cave_addr + 0x20, 1))
-            --    log(string.format("is_away_team: %d", is_away_team))
-            --end
             local tid = get_tid(ctx)
             local folder = map[tid]
             if not folder then
@@ -196,12 +162,8 @@ local function unset_harl()
 end
 
 badge_patch_map = {
-    ["badge0.ftex"] = set_badge,
-    ["badge1.ftex"] = set_badge,
-    ["badge2.ftex"] = set_badge,
-    ["badge0-left.ftex"] = set_badge_left,
-    ["badge1-left.ftex"] = set_badge_left,
-    ["badge2-left.ftex"] = set_badge_left,
+    ["badge.ftex"] = set_badge,
+    ["badge-left.ftex"] = set_badge_left,
 }
 
 local function get_armband(ctx, folder, basename)
@@ -230,7 +192,7 @@ local function get_full_pathname(ctx, folder, is_away, badge_file, suffix)
     return content_root .. folder .. "\\badge\\" .. badge_file .. suffix
 end
 
-get_badge = function(ctx, folder, badge_id)
+local function get_badge(ctx, folder, badge_id)
     local is_away, is_left = false, false
     badge_id = tonumber(badge_id)
     if badge_id >= 0x2000 then
@@ -243,18 +205,7 @@ get_badge = function(ctx, folder, badge_id)
     end
     log(string.format("Loading badge: %d, is_left=%s, is_away=%s", badge_id, is_left, is_away))
     local suffix = is_left and "-left.ftex" or ".ftex"
-
-    if badge_id == 0 then
-        return get_full_pathname(ctx, folder, is_away, "badge0", suffix)
-    end
-    -- one of the two badges is typically a champions badge
-    if badge_id and badge_id % 2 == 0 then
-        -- 2nd badge
-        return get_full_pathname(ctx, folder, is_away, "badge2", suffix)
-    elseif badge_id then
-        -- 1st badge
-        return get_full_pathname(ctx, folder, is_away, "badge1", suffix)
-    end
+    return get_full_pathname(ctx, folder, is_away, "badge", suffix)
 end
 
 local function get_respect_badge(ctx, folder)
@@ -419,7 +370,7 @@ function m.init(ctx)
     map = load_map(content_root .. "map.txt", true)
     team_map = load_map(content_root .. "map_teams.txt")
     patterns = {
-        --["Asset\\model\\character\\uniform\\badge\\#windx11\\badge(%d+)%.ftex"] = get_badge,
+        ["Asset\\model\\character\\uniform\\badge\\#windx11\\badge(%d+)%.ftex"] = get_badge,
         ["Asset\\model\\character\\uniform\\badge\\#windx11\\respect_badge%.ftex"] = get_respect_badge,
         ["Asset\\model\\character\\uniform\\cap\\#windx11\\(CL_captainmark.+)"] = get_armband,
     }
