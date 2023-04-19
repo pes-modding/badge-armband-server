@@ -1,0 +1,5 @@
+# Map for BOH/Champions badges
+
+103, "Liverpool"
+109, "Real Madrid"
+48, "Portugal"
