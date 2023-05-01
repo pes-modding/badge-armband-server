@@ -2,7 +2,7 @@
 -- by Hawke and juce
 -- originally released on EvoWeb.uk in April 2023
 
-local m = { version = "v3.0" }
+local m = { version = "v3.4" }
 
 local map
 local map_count
@@ -47,6 +47,18 @@ local function len(t)
     return count
 end
 
+local function get_tournament_id_for_team_id(ctx, team_id)
+    if not ctx.common_lib or not ctx.common_lib.has_value then
+        log("WARN: CommonLib missing or incompatible version")
+        return
+    end
+    for index, t in pairs(ctx.common_lib.teams_in_playable_leagues_map or empty) do
+        if ctx.common_lib.has_value and ctx.common_lib.has_value(t, team_id) then
+            return (ctx.common_lib.compID_to_tournamentID_map or empty)[index]
+        end
+    end
+end
+
 local function get_tid(ctx)
     local tid = ctx.tournament_id
     if tid == 65535 then
@@ -56,24 +68,6 @@ local function get_tid(ctx)
         end
     end
     return tid
-end
-
-function m.get_filepath(ctx, filename)
-    for p,f in pairs(patterns) do
-        local str = string.match(filename, p)
-        if str then
-            log("Loading: " .. filename)
-            local tid = get_tid(ctx)
-            local folder = map[tid]
-            if not folder then
-                -- nothing mapped for this tournament id
-                return
-            end
-            local path = f(ctx, folder, str)
-            log(filename .. " => " .. tostring(path))
-            return path
-        end
-    end
 end
 
 local function set_uefa_armband()
@@ -116,6 +110,9 @@ local function set_harl()
     --]]
     log("applying home-away-right-left patch at " .. memory.hex(harl_patch_addr))
     memory.write(harl_patch_addr, "\x48\xb8" .. memory.pack("u64", harl_patch_codecave_addr) .. "\xff\xd0\x90\x90\x90")
+end
+
+local function write_harl_code()
     --[[
     000000000C450000 | 41:80FC 01                      | cmp r12b,1                              |
     000000000C450004 | 75 05                           | jne C45000B                             |
@@ -126,14 +123,15 @@ local function set_harl()
     000000000C45001F | 66:81C1 0020                    | add cx,2000                             |
     000000000C450024 | 48:33C0                         | xor rax,rax                             |
     000000000C450027 | 0FB7C1                          | movzx eax,cx                            |
-    000000000C45002A | 894424 28                       | mov dword ptr ss:[rsp+28],eax           |
-    000000000C45002E | 4C:8BC3                         | mov r8,rbx                              | r8:"badge00"
-    000000000C450031 | 48:8D4C24 38                    | lea rcx,qword ptr ss:[rsp+38]           |
-    000000000C450036 | 8D53 21                         | lea edx,qword ptr ds:[rbx+21]           |
-    000000000C450039 | C3                              | ret                                     |
+    000000000C45002A | 05 00400000                     | add eax,4000                            |
+    000000000C45002F | 894424 28                       | mov dword ptr ss:[rsp+28],eax           |
+    000000000C450033 | 4C:8BC3                         | mov r8,rbx                              |
+    000000000C450036 | 48:8D4C24 38                    | lea rcx,qword ptr ss:[rsp+38]           |
+    000000000C45003B | 8D53 21                         | lea edx,qword ptr ds:[rbx+21]           |
+    000000000C45003E | C3                              | ret                                     |
     --]]
     log("writing home-away-right-left code snippet at " .. memory.hex(harl_patch_codecave_addr))
-    memory.write(harl_patch_codecave_addr, 
+    memory.write(harl_patch_codecave_addr,
         "\x41\x80\xfc\01" ..
         "\x75\x05" ..
         "\x66\x81\xc1\x00\x10" ..
@@ -143,6 +141,7 @@ local function set_harl()
         "\x66\x81\xc1\x00\x20" ..
         "\x48\x33\xc0" ..
         "\x0f\xb7\xc1" ..
+        "\x05\x00\x40\x00\x00" ..
         "\x89\x44\x24\x28" ..
         "\x4c\x8b\xc3" ..
         "\x48\x8d\x4c\x24\x38" ..
@@ -192,18 +191,7 @@ local function get_full_pathname(ctx, folder, is_away, badge_file, suffix)
     return content_root .. folder .. "\\badge\\" .. badge_file .. suffix
 end
 
-local function get_badge(ctx, folder, badge_id)
-    local is_away, is_left = false, false
-    badge_id = tonumber(badge_id)
-    if badge_id >= 0x2000 then
-        badge_id = badge_id - 0x2000
-        is_left = true
-    end
-    if badge_id >= 0x1000 then
-        badge_id = badge_id - 0x1000
-        is_away = true
-    end
-    log(string.format("Loading badge: %d, is_left=%s, is_away=%s", badge_id, is_left, is_away))
+local function get_badge(ctx, folder, badge_id, is_left, is_away)
     local suffix = is_left and "-left.ftex" or ".ftex"
     return get_full_pathname(ctx, folder, is_away, "badge", suffix)
 end
@@ -233,8 +221,74 @@ local function load_map(filename, required)
             log(string.format("map: id %d => %s", id, folder))
         end
     end
-    log("total entries in map: " .. len(map)) 
+    log("total entries in map: " .. len(map))
     return map
+end
+
+function m.get_filepath(ctx, filename)
+    local badge_id = string.match(filename, "Asset\\model\\character\\uniform\\badge\\#windx11\\badge(%d+)%.ftex")
+    if badge_id then
+        log("Loading: " .. filename)
+        local is_away, is_left = false, false
+        badge_id = tonumber(badge_id)
+        if badge_id >= 0x4000 then
+            badge_id = badge_id - 0x4000
+        end
+        if badge_id >= 0x2000 then
+            badge_id = badge_id - 0x2000
+            is_left = true
+        end
+        if badge_id >= 0x1000 then
+            badge_id = badge_id - 0x1000
+            is_away = true
+        end
+
+        local tid = ctx.tournament_id or 0
+        local folder = map[tid]
+        if not folder and (tid == 65535 or tid == 0) then
+            -- Exhibition or Edit Mode, not mapped
+            tid = get_tid(ctx) or tid
+            if tid == 65535 or tid == 0 then
+                -- Exhibition, not mapped, and not the same league
+                if is_away then
+                    tid = get_tournament_id_for_team_id(ctx, ctx.away_team) or tid
+                else
+                    tid = get_tournament_id_for_team_id(ctx, ctx.home_team) or tid
+                end
+            end
+        end
+        log(string.format("Loading badge: %d, is_left=%s, is_away=%s (tid=%d)", badge_id, is_left, is_away, tid))
+
+        folder = map[tid]
+        if not folder then
+            -- nothing mapped for this tournament id
+            return
+        end
+        local path = get_badge(ctx, folder, badge_id, is_left, is_away)
+        log(filename .. " => " .. tostring(path))
+        return path
+    end
+
+    for p,f in pairs(patterns) do
+        local str = string.match(filename, p)
+        if str then
+            log("Loading: " .. filename)
+            local tid = ctx.tournament_id or 0
+            local folder = map[tid]
+            if not folder and (tid == 65535 or tid == 0) then
+                -- Exhibition or Edit Mode, not mapped
+                tid = get_tid(ctx) or tid
+                folder = map[tid]
+            end
+            if not folder then
+                -- nothing mapped for this tournament id
+                return
+            end
+            local path = f(ctx, folder, str)
+            log(filename .. " => " .. tostring(path))
+            return path
+        end
+    end
 end
 
 function m.overlay_on(ctx)
@@ -255,30 +309,51 @@ function m.key_down(ctx, vkey)
     end
 end
 
-function m.set_teams(ctx)
-    -- start with both patches removed
+local function set_patches(ctx, team_id, is_edit_mode)
+    -- start with all patches removed
     unset_uefa_armband()
     unset_badge()
     unset_badge_left()
     unset_harl()
-    local tid = get_tid(ctx)
+
+    local tid = ctx.tournament_id
+    if not tid and is_edit_mode then
+        -- special tid for Edit Mode: 0
+        tid = 0
+        log("We are in edit mode. Using tid=0")
+    end
     local folder = map[tid]
     if not folder then
-        -- nothing mapped for this tournament id
-        -- unpatch the exe to disable armband enforcement
-        return 
-    end
-    local armband = get_armband(ctx, folder, "CL_captainmark_00.ftex")
-    if armband then
-        local f = io.open(armband)
-        if f then
-            f:close()
-            log(string.format("current tournament id %d has a custom armband: %s", tid, armband))
-            -- we have a custom armband for this tournament, so patch the exe
-            -- to enforce the loading of it
-            set_uefa_armband()
+        -- Not mapped. Get a league tid
+        tid = get_tid(ctx)
+        if not tid then
+            tid = get_tournament_id_for_team_id(ctx, team_id)
         end
     end
+
+    folder = folder or map[tid]
+    if folder then
+        -- a mapped tournament, or exhibition with teams from the same league
+        local armband = get_armband(ctx, folder, "CL_captainmark_00.ftex")
+        if armband then
+            local f = io.open(armband)
+            if f then
+                f:close()
+                log(string.format("current tournament id %s has a custom armband: %s", tid, armband))
+                -- we have a custom armband for this tournament, so patch the exe
+                -- to enforce the loading of it
+                set_uefa_armband()
+            end
+        end
+    end
+
+    if ctx.tournament_id == 65535 or is_edit_mode then
+        set_badge()
+        set_badge_left()
+        set_harl()
+        return
+    end
+
     local team_folders = {
         comp = "",
         home = team_map[ctx.home_team],
@@ -297,9 +372,19 @@ function m.set_teams(ctx)
             end
         end
     end
-    -- if mapped, then we the harl-patch
+    -- if we have a badge, then install harl-patch
     if has_a_badge then
         set_harl()
+    end
+end
+
+function m.set_teams(ctx)
+    set_patches(ctx)
+end
+
+function m.set_home_team_for_kits(ctx, team_id, is_edit_mode)
+    if is_edit_mode then
+        set_patches(ctx, team_id, true)
     end
 end
 
@@ -357,6 +442,7 @@ function m.init(ctx)
             error("unable to allocate memory with VirtualAlloc")
         end
         log("harl_patch_codecave_addr allocated at: " .. memory.hex(harl_patch_codecave_addr))
+        write_harl_code()
     else
         error("ffi module must be enabled for this module to work. To enable, set luajit.ext.enabled = 1 in sider.ini")
     end
@@ -370,12 +456,12 @@ function m.init(ctx)
     map = load_map(content_root .. "map.txt", true)
     team_map = load_map(content_root .. "map_teams.txt")
     patterns = {
-        ["Asset\\model\\character\\uniform\\badge\\#windx11\\badge(%d+)%.ftex"] = get_badge,
         ["Asset\\model\\character\\uniform\\badge\\#windx11\\respect_badge%.ftex"] = get_respect_badge,
         ["Asset\\model\\character\\uniform\\cap\\#windx11\\(CL_captainmark.+)"] = get_armband,
     }
     ctx.register("livecpk_get_filepath", m.get_filepath)
     ctx.register("set_teams", m.set_teams)
+    ctx.register("set_home_team_for_kits", m.set_home_team_for_kits)
     ctx.register("overlay_on", m.overlay_on)
     ctx.register("key_down", m.key_down)
 end
